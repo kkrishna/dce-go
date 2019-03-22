@@ -24,3 +24,4 @@ import:
   repo: git@github.com:rdelval/thrift.git
   subpackages:
   - lib/go/thrift
+- package: github.com/docker/docker
