@@ -16,16 +16,138 @@
 package monitor
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	dockertype "github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/events"
+	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/client"
 	"time"
 
 	"github.com/paypal/dce-go/config"
 	"github.com/paypal/dce-go/types"
 	"github.com/paypal/dce-go/utils"
 	"github.com/paypal/dce-go/utils/pod"
-	"github.com/paypal/dce-go/utils/wait"
 	log "github.com/sirupsen/logrus"
 )
+
+func podMonitorEvent(systemProxyId string) types.PodStatus {
+	logger := log.WithFields(log.Fields{
+		"func": "monitor.podMonitorEvent",
+	})
+
+
+	isService := config.IsService()
+	logger.Printf("Task is SERVICE: %v", isService)
+	logger.Println(" Container Monitor List: ", pod.MonitorContainerList)
+
+	ctx := context.Background()
+	cli, err := client.NewEnvClient()
+	if err != nil {
+		logger.Errorln("Docker Client error: ", err.Error())
+		return types.POD_FAILED
+	}
+
+	log.Println("Negotiating API version ..")
+	cli.NegotiateAPIVersion(ctx)
+	log.Println("adding new listener")
+	filters := filters.NewArgs()
+	filters.Add("type", events.ContainerEventType)
+
+	for _, cid := range pod.MonitorContainerList {
+		filters.Add("container", cid)
+	}
+	filters.Add("event", "die")
+	filters.Add("event", "destroy")
+	filters.Add("event", "kill")
+	filters.Add("event", "stop")
+	filters.Add("event", "health_status")
+	filters.Add("event", "oom")
+	filters.Add("event", "restart")
+	filters.Add("event", "start")
+	filters.Add("event", "pause")
+	filters.Add("event", "unpause")
+
+	options := dockertype.EventsOptions{Filters: filters}
+	eventsChan, errChan := cli.Events(ctx, options)
+
+	for {
+		select {
+		case err := <-errChan:
+			if err != nil {
+				log.Println("error in event channel-- ", err)
+				//TODO: check container list in pod after docker client reconnect!
+				log.Println(" Sleeping for 10 sec ", time.Now())
+				time.Sleep(10 * time.Second)
+				eventsChan, errChan = cli.Events(context.Background(), options)
+			}
+
+		case event := <-eventsChan:
+			if bytes, err := json.Marshal(event); err != nil {
+				log.Fatalf("error Marshalling: %v", err)
+			} else {
+				log.Println(" Message JSON: ", string(bytes))
+			}
+
+			containerId := event.Actor.ID
+			logger.Println("Message Payload: ", event)
+
+			if event.Type == "container" {
+				if event.Action == "health_status: healthy" {
+					logger.Println("healthy event received for container -- ", containerId)
+				} else if event.Action == "health_status: unhealthy" {
+					logger.Println("unhealthy event received for container -- ", containerId)
+					ctx.Done()
+					return types.POD_FAILED
+				} else if event.Action == "stop" || event.Action == "die" {
+					logger.Println(event.Action, "  -- stop/die event received for container %s", containerId)
+					ctx := context.Background()
+					if details, err := cli.ContainerInspect(ctx, event.Actor.ID); err != nil {
+						logger.Println("error: ", err.Error())
+					} else {
+						logger.Println(" container inspect: ", details)
+						exitCode := details.State.ExitCode
+						isRunning := details.State.Running
+						logger.Println(" exitCode: ", exitCode, "   isRunning: ", isRunning)
+						if exitCode == 0 && !isRunning {
+							//Remove container from the list !!
+							for i := 0; i < len(pod.MonitorContainerList); i++ {
+								if pod.MonitorContainerList[i] == event.Actor.ID {
+									pod.MonitorContainerList = append(pod.MonitorContainerList[:i], pod.MonitorContainerList[i+1:]...)
+									logger.Println("containerList: ", pod.MonitorContainerList)
+									if len(pod.MonitorContainerList) == 0 && !isService {
+										logger.Println("Task is ADHOC job. All containers in the pod exit with code 0, sending FINISHED")
+										return types.POD_FINISHED
+									}
+									if len(pod.MonitorContainerList) == 0 {
+										logger.Println("Task is SERVICE. All containers in the pod exit with code 0, sending FAILED")
+										return types.POD_FAILED
+									}
+									if len(pod.MonitorContainerList) == 1 && pod.MonitorContainerList[0] == systemProxyId && !isService {
+										logger.Println("Task is ADHOC job. Only infra container is running in the pod, sending FINISHED")
+										return types.POD_FINISHED
+									}
+									if len(pod.MonitorContainerList) == 1 && pod.MonitorContainerList[0] == systemProxyId {
+										logger.Println("Task is SERVICE. Only infra container is running in the pod, sending FAILED")
+										return types.POD_FAILED
+									}
+									break
+								}
+							}
+						} else if exitCode != 0 {
+							return types.POD_FAILED
+						}
+					}
+				} else if event.Action == "start" {
+					logger.Println(" start event received for container -- ", containerId)
+				}
+			}
+		}
+	}
+	return types.POD_EMPTY
+}
+
 
 // Watching pod status and notifying executor if any container in the pod goes wrong
 func podMonitor(systemProxyId string) types.PodStatus {
@@ -125,9 +247,11 @@ func MonitorPoller() {
 		logger.Printf("Infra container id: %s", infraContainerId)
 	}
 
-	res, err := wait.PollForever(time.Duration(config.GetPollInterval())*time.Millisecond, nil, wait.ConditionFunc(func() (string, error) {
-		return podMonitor(infraContainerId).String(), nil
-	}))
+	//res, err := wait.PollForever(time.Duration(config.GetPollInterval())*time.Millisecond, nil, wait.ConditionFunc(func() (string, error) {
+	//	return podMonitor(infraContainerId).String(), nil
+	//}))
+
+	res := podMonitorEvent(infraContainerId).String()
 
 	logger.Printf("Pod Monitor Receiver : Received  message %s", res)
 

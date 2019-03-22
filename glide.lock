@@ -1,10 +1,49 @@
-hash: 72cb9cb5eb31c0d845197c178e2794dbb769fdefaccf8eb7b4bf751c3e2dc396
-updated: 2018-04-12T15:10:47.61909011-07:00
+hash: 577ab7c1b85c3435014c4ac68b5754b78a4418cccd42800176da0862fc97fa1d
+updated: 2019-03-22T00:07:45.079516-07:00
 imports:
+- name: git.apache.org/thrift.git
+  version: b2a4d4ae21c789b689dd162deb819665567f481c
+  subpackages:
+  - lib/go/thrift
 - name: github.com/davecgh/go-spew
   version: ecdeabc65495df2dec95d7c4a4c3e021903035e5
   subpackages:
   - spew
+- name: github.com/docker/distribution
+  version: 6d62eb1d4a3515399431b713fde3ce5a9b40e8d5
+  subpackages:
+  - digestset
+  - reference
+  - registry/api/errcode
+- name: github.com/docker/docker
+  version: 7c197c18d30e1683767709d69397ad1c0a5b2164
+  subpackages:
+  - api
+  - api/types
+  - api/types/blkiodev
+  - api/types/container
+  - api/types/events
+  - api/types/filters
+  - api/types/image
+  - api/types/mount
+  - api/types/network
+  - api/types/registry
+  - api/types/strslice
+  - api/types/swarm
+  - api/types/swarm/runtime
+  - api/types/time
+  - api/types/versions
+  - api/types/volume
+  - client
+  - errdefs
+- name: github.com/docker/go-connections
+  version: 97c2040d34dfae1d1b1275fa3a78dbdd2f41cf7e
+  subpackages:
+  - nat
+  - sockets
+  - tlsconfig
+- name: github.com/docker/go-units
+  version: 2fb04c6466a548a03cb009c5569ee1ab1e35398e
 - name: github.com/fsnotify/fsnotify
   version: fd9ec7deca8bf46ecd2a795baaacf2b3a9be1197
 - name: github.com/gogo/protobuf
@@ -13,6 +52,14 @@ imports:
   - proto
 - name: github.com/golang/glog
   version: 23def4e6c14b4da8ac2ed8007337bc5eb5007998
+- name: github.com/golang/protobuf
+  version: c9c7427a2a70d2eb3bafa0ab2dc163e45f143317
+  subpackages:
+  - proto
+  - ptypes
+  - ptypes/any
+  - ptypes/duration
+  - ptypes/timestamp
 - name: github.com/hashicorp/hcl
   version: 6e968a3fcdcbab092f5307fd0d85479d5af1e4dc
   subpackages:
@@ -40,8 +87,17 @@ imports:
   - messenger
   - messenger/sessionid
   - upid
+- name: github.com/Microsoft/go-winio
+  version: c599b533b43b1363d7d7c6cfda5ede70ed73ff13
 - name: github.com/mitchellh/mapstructure
   version: f3009df150dadf309fdee4a54ed65c124afad715
+- name: github.com/opencontainers/go-digest
+  version: ac19fd6e7483ff933754af248d80be865e543d22
+- name: github.com/opencontainers/image-spec
+  version: da296dcb1e473a9b4e2d148941d7faa9ac8fea3f
+  subpackages:
+  - specs-go
+  - specs-go/v1
 - name: github.com/paypal/gorealis
   version: 9631aa3aab9964631946814fa0d8b99a133c982f
   subpackages:
@@ -57,10 +113,6 @@ imports:
   version: 645ef00459ed84a119197bfb8d8205042c6df63d
 - name: github.com/pkg/sftp
   version: 4d0e916071f68db74f8a73926335f809396d6b42
-- name: github.com/samuel/go-zookeeper
-  version: 471cd4e61d7a78ece1791fa5faa0345dc8c7d5a5
-  subpackages:
-  - zk
 - name: github.com/sirupsen/logrus
   version: c078b1e43f58d563c74cebe63c85789e76ddb627
 - name: github.com/spf13/afero
@@ -93,23 +145,46 @@ imports:
   version: 5ccada7d0a7ba9aeb5d3aca8d3501b4c2a509fec
   subpackages:
   - context
+  - proxy
 - name: golang.org/x/sys
   version: c200b10b5d5e122be351b67af224adc6128af5bf
   subpackages:
   - unix
+  - windows
 - name: golang.org/x/text
   version: a8b38433e35b65ba247bb267317037dee1b70cea
   subpackages:
   - transform
   - unicode/norm
-- name: git.apache.org/thrift.git
-  version: b2a4d4ae21c789b689dd162deb819665567f481c
+- name: google.golang.org/genproto
+  version: 4eb30f4778eed4c258ba66527a0d4f9ec8a36c45
   subpackages:
-  - lib/go/thrift
+  - googleapis/rpc/status
+- name: google.golang.org/grpc
+  version: f3955b8e9e244dd4dd4bc4f7b7a23a8445400a76
+  subpackages:
+  - codes
+  - status
 - name: gopkg.in/yaml.v2
   version: a5b47d31c556af34a302ce5d659e6fea44d90de0
 testImports:
+- name: github.com/google/go-cmp
+  version: 6f77996f0c42f7b84e5a2b252227263f93432e9b
+  subpackages:
+  - cmp
+  - cmp/internal/diff
+  - cmp/internal/flags
+  - cmp/internal/function
+  - cmp/internal/value
 - name: github.com/pmezard/go-difflib
   version: 792786c7400a136282c1664665ae0a8db921c6c2
   subpackages:
   - difflib
+- name: gotest.tools
+  version: d1a6560d983a17c84a34edeb67898f2dc00bb646
+  subpackages:
+  - assert
+  - assert/cmp
+  - internal/difflib
+  - internal/format
+  - internal/source
