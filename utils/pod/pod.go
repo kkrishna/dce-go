@@ -61,7 +61,7 @@ var CurPodStatus = &Status{
 var ComposeFiles []string
 var ComposeTaskInfo *mesos.TaskInfo
 var PluginOrder []string
-
+var PodStartTime string
 var HealthCheckListId = make(map[string]bool)
 var MonitorContainerList []string
 var SinglePort bool
@@ -287,6 +287,8 @@ func GetPorts(taskInfo *mesos.TaskInfo) *list.Element {
 func LaunchPod(files []string) types.PodStatus {
 	//log.SetOutput(os.Stdout)
 	log.Println("====================Launch Pod====================")
+	PodStartTime = time.Now().Format(time.RFC3339)
+	time.Sleep(1*time.Second)
 
 	parts, err := GenerateCmdParts(files, " up -d")
 	if err != nil {
@@ -1055,10 +1057,12 @@ func HealthCheckEvents(files []string, podServices map[string]bool) (string) {
 	logger := log.WithFields(log.Fields{
 		"func": "HealthCheckEvents",
 	})
+
 	logger.Println("====================Health Check Events====================", len(podServices))
 	logger.Printf("pod service list: %v", podServices)
 	isService := config.IsService()
 	logger.Printf("Task is SERVICE: %v", isService)
+	logger.Println(" PodStartTime: ", PodStartTime)
 
 	var err error
 	var containers []string
@@ -1070,7 +1074,6 @@ func HealthCheckEvents(files []string, podServices map[string]bool) (string) {
 	for name := range podServices {
 		services = append(services, name)
 	}
-
 	logger.Printf("service list: %v", services)
 
 	// Start checking containers are running and healthy ONLY when all the services are launched by docker
@@ -1081,7 +1084,6 @@ func HealthCheckEvents(files []string, podServices map[string]bool) (string) {
 			logger.Errorln("Error retrieving container id list : ", err.Error())
 			return types.POD_FAILED.String()
 		}
-
 		logger.Println("list of containers are launched : ", containers)
 		time.Sleep(interval)
 	}
@@ -1089,6 +1091,16 @@ func HealthCheckEvents(files []string, podServices map[string]bool) (string) {
 	logger.Println("Initial Health Check : Expected number of containers in monitoring : ", len(podServices))
 	logger.Println("Initial Health Check : Actual number of containers in monitoring : ", len(containers))
 	logger.Println("Container List : ", containers)
+
+	// Find containers with healthcheck configured..
+	// populates HealthCheckListId, to be used later..
+	for  _, c := range containers {
+		isHealthCheckConfigured(c)
+	}
+
+	healthcount := len(HealthCheckListId)
+	logger.Println("HealthCheckListId: ", HealthCheckListId)
+	logger.Println(" healthcheck list length: ", healthcount)
 
 	// Get infra container id
 	var systemProxyId string
@@ -1103,7 +1115,9 @@ func HealthCheckEvents(files []string, podServices map[string]bool) (string) {
 	}
 	logger.Println("Pod has infra container: ", hasInfra)
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	cli, err := client.NewEnvClient()
 	if err != nil {
 		logger.Errorln("Docker Client error: ", err.Error())
@@ -1129,11 +1143,8 @@ func HealthCheckEvents(files []string, podServices map[string]bool) (string) {
 	filters.Add("event", "start")
 	filters.Add("event", "pause")
 	filters.Add("event", "unpause")
-
-	options := dockertype.EventsOptions{Filters: filters}
+	options := dockertype.EventsOptions{Filters: filters, Since:PodStartTime}
 	eventsChan, errChan := cli.Events(context.Background(), options)
-
-	//healthycount := 0
 
 	for {
 		select {
@@ -1145,22 +1156,25 @@ func HealthCheckEvents(files []string, podServices map[string]bool) (string) {
 				time.Sleep(10 * time.Second)
 				eventsChan, errChan = cli.Events(context.Background(), options)
 			}
-
 		case event := <-eventsChan:
 			if bytes, err := json.Marshal(event); err != nil {
 				log.Fatalf("error Marshalling: %v", err)
 			} else {
 				log.Println(" Message JSON: ", string(bytes))
 			}
-
 			containerId := event.Actor.ID
+
+			totalcontainers := len(containers)
 			logger.Println("Message Payload: ", event)
+			logger.Println(" START event -- healthcount: ", healthcount, "  len(containers): ", totalcontainers)
 
 			if event.Type == "container" {
 				if event.Action == "health_status: healthy" {
-					logger.Println("healthy event received for container -- ", containerId)
+					healthcount--
+					logger.Println("healthy event received for container -- ", containerId, " healthCount: ", healthcount)
 				} else if event.Action == "health_status: unhealthy" {
-					logger.Println("unhealthy event received for container -- ", containerId)
+					logger.Println("unhealthy event received for container -- ", containerId, "  healthCount: ", healthcount)
+					GetPodDetail(files, "", false)
 					return types.POD_FAILED.String()
 				} else if event.Action == "stop" || event.Action == "die" {
 					logger.Println(event.Action, "  -- stop/die event received for container %s", containerId)
@@ -1174,89 +1188,111 @@ func HealthCheckEvents(files []string, podServices map[string]bool) (string) {
 						logger.Println(" exitCode: ", exitCode, "   isRunning: ", isRunning)
 						if exitCode == 0 && !isRunning {
 							//Remove container from the list !!
-							for i := 0; i < len(MonitorContainerList); i++ {
-								if MonitorContainerList[i] == event.Actor.ID {
-									MonitorContainerList = append(MonitorContainerList[:i], MonitorContainerList[i+1:]...)
-									logger.Println("containerList: ", MonitorContainerList)
+							logger.Println(" healthCount: ", healthcount)
+							// remove container from containers..
+							for i := 0; i < len(containers); i++ {
+								if containers[i] == event.Actor.ID {
+									containers = append(containers[:i], containers[i+1:]...)
+									logger.Println("containerList: ", containers)
 									break
 								}
 							}
 						} else if exitCode != 0 {
+							logger.Println(" healthCount: ", healthcount)
+							GetPodDetail(files, "", false)
 							return types.POD_FAILED.String()
 						}
 					}
 				} else if event.Action == "start" {
 					logger.Println(" start event received for container -- ", containerId)
+					// if healthcheck is configured!!
+					if hc, ok := HealthCheckListId[containerId] ; ok && hc  {
+						logger.Println(" healthcheck configured -- ", containerId)
+					} else {
+						logger.Println(" healthcheck NOT configured -- ", containerId)
+					}
+					logger.Println(" healthCount: ", healthcount)
 				}
+			}
 
+			logger.Println(" healthcount: ", healthcount, "  len(containers): ", len(containers))
+			//Init health check successful!
+			if healthcount == 0 {
+				logger.Println("====================Health check Done====================")
+				logger.Println(" totalcontainers: ", totalcontainers, "  healthcount: ", healthcount)
+				GetPodDetail(files, "", false)
+				MonitorContainerList = make([]string, len(containers))
+				//copy containers to MonitorContainerList;
+				copy(MonitorContainerList, containers)
+				return types.POD_RUNNING.String()
 			}
 
 			if len(containers) == 0 && !isService {
 				logger.Println("Task is ADHOC job. Send POD_FINISHED")
+				GetPodDetail(files, "", false)
 				return types.POD_FINISHED.String()
 			} else if len(containers) == 0 && isService {
 				logger.Println("Task is SERVICE. Send POD_FAILED")
+				GetPodDetail(files, "", false)
 				return types.POD_FAILED.String()
 			} else if !isService && hasInfra && len(containers) == 1 && containers[0] == systemProxyId {
 				logger.Println("Task is ADHOC job. Only infra container is running, send POD_FINISHED")
+				GetPodDetail(files, "", false)
 				return types.POD_FINISHED.String()
 			} else if isService && hasInfra && len(containers) == 1 && containers[0] == systemProxyId {
 				logger.Println("Task is SERVICE. Only infra container is running, send POD_FAILED")
+				GetPodDetail(files, "", false)
 				return types.POD_FAILED.String()
-			} else {
-				logger.Println("Initial Health Check : send POD_RUNNING")
-				return types.POD_RUNNING.String()
 			}
-
 		}
 	}
 }
 
 
-func processEvents(cli *client.Client, message events.Message, containerList []string) (string){
-	logger := log.WithFields(log.Fields{
-		"func": "processEvents",
-	})
-
-	containerId := message.Actor.ID
-	logger.Println("Message Payload: ", message)
-
-	if message.Type == "container" {
-		if message.Action == "health_status: healthy" {
-			logger.Println("healthy event received for container -- ", containerId)
-
-		} else if message.Action == "health_status: unhealthy" {
-			logger.Println("unhealthy event received for container -- ", containerId)
-			return  types.POD_FAILED.String()
-		} else if message.Action == "stop" || message.Action == "die" {
-			logger.Println(message.Action, "  -- stop/die event received for container %s", containerId)
-			ctx := context.Background()
-			if details, err := cli.ContainerInspect(ctx, message.Actor.ID); err != nil {
-				logger.Println("error: ", err.Error())
-			} else {
-				logger.Println(" container inspect: ", details)
-				exitCode := details.State.ExitCode
-				isRunning := details.State.Running
-				logger.Println(" exitCode: ", exitCode, "   isRunning: ", isRunning)
-				if exitCode == 0 && !isRunning {
-					//Remove container from the list !!
-					for i, container := range containerList {
-						if container == message.Actor.ID {
-							containerList = append(containerList[:i], containerList[i+1:]...)
-							logger.Println("containerList: ", containerList)
-							break
-						}
-					}
-
-				}
-			}
-		} else if message.Action == "start" {
-			logger.Println(" start event received for container -- ", containerId)
-		}
-
-	}
-	return ""
-}
+//func processEvents(cli *client.Client, message events.Message, containerList []string) (string){
+//	logger := log.WithFields(log.Fields{
+//		"func": "processEvents",
+//	})
+//
+//	containerId := message.Actor.ID
+//	logger.Println("Message Payload: ", message)
+//
+//	if message.Type == "container" {
+//		if message.Action == "health_status: healthy" {
+//			logger.Println("healthy event received for container -- ", containerId)
+//
+//		} else if message.Action == "health_status: unhealthy" {
+//			logger.Println("unhealthy event received for container -- ", containerId)
+//			return  types.POD_FAILED.String()
+//		} else if message.Action == "stop" || message.Action == "die" {
+//			logger.Println(message.Action, "  -- stop/die event received for container %s", containerId)
+//			ctx := context.Background()
+//			if details, err := cli.ContainerInspect(ctx, message.Actor.ID); err != nil {
+//				logger.Println("error: ", err.Error())
+//			} else {
+//				logger.Println(" container inspect: ", details)
+//				exitCode := details.State.ExitCode
+//				isRunning := details.State.Running
+//				logger.Println(" exitCode: ", exitCode, "   isRunning: ", isRunning)
+//				if exitCode == 0 && !isRunning {
+//					//Remove container from the list !!
+//					for i, container := range containerList {
+//						if container == message.Actor.ID {
+//							containerList = append(containerList[:i], containerList[i+1:]...)
+//							logger.Println("containerList: ", containerList)
+//							break
+//						}
+//					}
+//
+//				}
+//			}
+//		} else if message.Action == "start" {
+//			logger.Println(" start event received for container -- ", containerId)
+//		}
+//
+//	}
+//	return ""
+//}
 
 // healthCheck includes health checking for primary container and exit code checking for other containers
 func HealthCheck(files []string, podServices map[string]bool, out chan<- string) {

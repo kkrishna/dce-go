@@ -42,7 +42,8 @@ func podMonitorEvent(systemProxyId string) types.PodStatus {
 	logger.Printf("Task is SERVICE: %v", isService)
 	logger.Println(" Container Monitor List: ", pod.MonitorContainerList)
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	cli, err := client.NewEnvClient()
 	if err != nil {
 		logger.Errorln("Docker Client error: ", err.Error())
@@ -69,7 +70,7 @@ func podMonitorEvent(systemProxyId string) types.PodStatus {
 	filters.Add("event", "pause")
 	filters.Add("event", "unpause")
 
-	options := dockertype.EventsOptions{Filters: filters}
+	options := dockertype.EventsOptions{Filters: filters, Since:pod.PodStartTime}
 	eventsChan, errChan := cli.Events(ctx, options)
 
 	for {
@@ -118,24 +119,29 @@ func podMonitorEvent(systemProxyId string) types.PodStatus {
 									logger.Println("containerList: ", pod.MonitorContainerList)
 									if len(pod.MonitorContainerList) == 0 && !isService {
 										logger.Println("Task is ADHOC job. All containers in the pod exit with code 0, sending FINISHED")
+										ctx.Done()
 										return types.POD_FINISHED
 									}
 									if len(pod.MonitorContainerList) == 0 {
 										logger.Println("Task is SERVICE. All containers in the pod exit with code 0, sending FAILED")
+										ctx.Done()
 										return types.POD_FAILED
 									}
 									if len(pod.MonitorContainerList) == 1 && pod.MonitorContainerList[0] == systemProxyId && !isService {
 										logger.Println("Task is ADHOC job. Only infra container is running in the pod, sending FINISHED")
+										ctx.Done()
 										return types.POD_FINISHED
 									}
 									if len(pod.MonitorContainerList) == 1 && pod.MonitorContainerList[0] == systemProxyId {
 										logger.Println("Task is SERVICE. Only infra container is running in the pod, sending FAILED")
+										ctx.Done()
 										return types.POD_FAILED
 									}
 									break
 								}
 							}
 						} else if exitCode != 0 {
+							ctx.Done()
 							return types.POD_FAILED
 						}
 					}

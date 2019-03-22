@@ -373,15 +373,20 @@ func pullImage() error {
 }
 
 func initHealthCheck(podServices map[string]bool) (types.PodStatus, error) {
-	res, err := wait.WaitUntil(config.GetLaunchTimeout()*time.Millisecond, wait.ConditionCHFunc(func(healthCheckReply chan string) {
-		pod.HealthCheck(pod.ComposeFiles, podServices, healthCheckReply)
-	}))
 
-	if err != nil {
-		log.Printf("POD_INIT_HEALTH_CHECK_TIMEOUT -- %v", err)
-		return types.POD_FAILED, err
-	}
-	return utils.ToPodStatus(res), err
+	response := pod.HealthCheckEvents(pod.ComposeFiles, podServices)
+	log.Println(" HealthCheckEvents response: ", response)
+	return utils.ToPodStatus(response), nil
+
+	//res, err := wait.WaitUntil(config.GetLaunchTimeout()*time.Millisecond, wait.ConditionCHFunc(func(healthCheckReply chan string) {
+	//	pod.HealthCheck(pod.ComposeFiles, podServices, healthCheckReply)
+	//}))
+	//
+	//if err != nil {
+	//	log.Printf("POD_INIT_HEALTH_CHECK_TIMEOUT -- %v", err)
+	//	return types.POD_FAILED, err
+	//}
+	//return utils.ToPodStatus(res), err
 }
 
 func getServices(ctx context.Context) map[string]bool {
